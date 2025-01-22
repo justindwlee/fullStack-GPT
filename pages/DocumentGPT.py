@@ -5,9 +5,10 @@ from langchain.text_splitter import CharacterTextSplitter
 from langchain.vectorstores import Chroma
 from langchain.embeddings import OpenAIEmbeddings, CacheBackedEmbeddings
 from langchain.storage import LocalFileStore
-from langchain.prompts import ChatPromptTemplate
+from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.schema.runnable import RunnablePassthrough, RunnableLambda
 from langchain.callbacks.base import BaseCallbackHandler
+from langchain.memory import ConversationSummaryBufferMemory
 
 st.set_page_config(page_title="DocumentGPT", page_icon="📄")
 
@@ -26,8 +27,6 @@ class ChatCallbackHandler(BaseCallbackHandler):
         self.message += token
         self.message_box.markdown(self.message)
         
-        
-
 
 llm = ChatOpenAI(
     temperature=0.1,
@@ -36,6 +35,12 @@ llm = ChatOpenAI(
         ChatCallbackHandler(),
     ]
 )
+
+#Created a separate llm for memory, so it would not invoke callbacks when summarizing the history of the chat
+memory_llm = ChatOpenAI(
+    temperature=0.1,
+)
+
 
 @st.cache_resource(show_spinner="Embedding file...")
 def embed_file(file):
@@ -62,6 +67,9 @@ def embed_file(file):
     retriever = vectorstore.as_retriever()
     return retriever
 
+def load_memory(_):
+    return memory.load_memory_variables({})["history"]
+
 def save_message(message, role):
     st.session_state["messages"].append({"message": message, "role": role})
 
@@ -83,16 +91,25 @@ def paint_history():
 def format_docs(docs):
     return "\n\n".join(document.page_content for document in docs)
 
+def invoke_chain(message):
+    result = chain.invoke(message)
+    memory.save_context(
+        {"input": message},
+        {"output": result.content}
+    )
+
 
 
 prompt = ChatPromptTemplate.from_messages([
     ("system",
     """
     Answer the question using ONLY the following context. If you don't know the answer just say you don't know. DON't make anything up.
+    If the user tells you anything about himself, such as his name, try to remember his personal information so you can give a friendly impression.
 
     Context: {context}
     """
     ),
+    MessagesPlaceholder(variable_name="history"),
     ("human", "{question}")
 ])
 
@@ -121,12 +138,22 @@ if file:
     paint_history()
     message = st.chat_input("Ask anything about your file...")
     if message:
+        memory = st.session_state.memory
         send_message(message, "human")
         chain = {
             "context": retriever | RunnableLambda(format_docs),
+            "history": load_memory,
             "question": RunnablePassthrough()
         } | prompt | llm
         with st.chat_message("ai"):
-            chain.invoke(message)
+            invoke_chain(message)
 else:
     st.session_state["messages"] = []
+    st.session_state.memory = ConversationSummaryBufferMemory(
+        llm=memory_llm,
+        max_token_limit=150,
+        return_messages=True
+    )
+
+
+
