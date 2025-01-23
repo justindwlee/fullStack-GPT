@@ -1,14 +1,14 @@
 import streamlit as st
-from langchain.chat_models import ChatOpenAI
+from langchain.chat_models import ChatOllama
 from langchain.document_loaders import UnstructuredFileLoader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.vectorstores import Chroma
-from langchain.embeddings import OpenAIEmbeddings, CacheBackedEmbeddings
+from langchain.embeddings import OllamaEmbeddings, CacheBackedEmbeddings
 from langchain.storage import LocalFileStore
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.schema.runnable import RunnablePassthrough, RunnableLambda
 from langchain.callbacks.base import BaseCallbackHandler
-from langchain.memory import ConversationSummaryBufferMemory
+from langchain.memory import ConversationBufferWindowMemory
 
 st.set_page_config(page_title="PrivateGPT", page_icon="❗")
 
@@ -28,7 +28,8 @@ class ChatCallbackHandler(BaseCallbackHandler):
         self.message_box.markdown(self.message)
         
 
-llm = ChatOpenAI(
+llm = ChatOllama(
+    model="mistral:latest",
     temperature=0.1,
     streaming=True,
     callbacks=[
@@ -37,7 +38,8 @@ llm = ChatOpenAI(
 )
 
 #Created a separate llm for memory, so it would not invoke callbacks when summarizing the history of the chat
-memory_llm = ChatOpenAI(
+memory_llm = ChatOllama(
+    model="mistral:latest",
     temperature=0.1,
 )
 
@@ -51,7 +53,7 @@ def embed_file(file):
 
     cache_dir = LocalFileStore(f"./.cache/private_embeddings/{file.name}")
 
-    splitter = CharacterTextSplitter.from_tiktoken_encoder(
+    splitter = CharacterTextSplitter(
         separator="\n",
         chunk_size=600,
         chunk_overlap=100,
@@ -60,7 +62,9 @@ def embed_file(file):
     loader = UnstructuredFileLoader(file_path)
     docs = loader.load_and_split(text_splitter=splitter)
 
-    embeddings = OpenAIEmbeddings()
+    embeddings = OllamaEmbeddings(
+        model="mistral:latest"
+    )
     cached_embeddings = CacheBackedEmbeddings.from_bytes_store(embeddings, cache_dir)
 
     vectorstore = Chroma.from_documents(docs, cached_embeddings)
@@ -115,7 +119,7 @@ prompt = ChatPromptTemplate.from_messages([
 
 
 
-st.title("DocumentGPT")
+st.title("PrivateGPT")
 
 st.markdown(
     """
@@ -149,10 +153,9 @@ if file:
             invoke_chain(message)
 else:
     st.session_state["messages"] = []
-    st.session_state.memory = ConversationSummaryBufferMemory(
-        llm=memory_llm,
-        max_token_limit=150,
-        return_messages=True
+    st.session_state.memory = ConversationBufferWindowMemory(
+        return_messages=True,
+        k=6,
     )
 
 
